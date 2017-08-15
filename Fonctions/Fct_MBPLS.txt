@@ -1,0 +1,118 @@
+
+tr <- function (m){
+  total_sum <- 0
+  if(is.matrix(m))  {
+    row_count <- nrow(m)
+    col_count <- ncol(m)
+    if(row_count == col_count)    {
+      total_sum <-sum(diag(m))
+      total_sum    }
+    else    {      message ('Matrix is not square')    }  }
+  else  {    message( 'Object is not a matrix')  }}
+
+
+MBPLS <- function(blocX, blocY, A = 1, deflY = TRUE, ScaleX= FALSE, ScaleY=FALSE){
+  
+  if("pls" %in% rownames(installed.packages()) == FALSE) {install.packages("pls")}
+  require(pls) ; require(MASS)
+  
+  n <- nrow(blocY)
+  nb <- length(blocX)
+  
+
+  
+  blocX.def <- lapply(blocX,scale,scale=ScaleX)
+  blocY <- scale(blocY,scale=ScaleY)
+  X.Fus <- NULL 
+  for(i in 1:nb) {X.Fus <- cbind(X.Fus,blocX.def[[i]])}
+  X.def <- X.Fus
+   
+  
+  
+  Tk <- Uk <- matrix(NA,nrow=n,ncol=A)
+  rownames(Tk) <- rownames(Uk) <- rownames(X.Fus)
+  Y.def <- blocY
+  TT <-  Wb <- Tb <- list()
+  Wk <- matrix(NA,nrow=nb,ncol=A)
+  
+  for(i in 1:nb){
+    Wb[[i]] <- matrix(NA,nrow=ncol(blocX.def[[i]]),ncol=A)
+    Tb[[i]] <- matrix(NA,nrow=n,ncol=A)
+  }
+  
+  PG <-  WG <- matrix(NA,ncol=A,nrow=ncol(X.Fus))
+  c <- matrix(NA,ncol=A,nrow=ncol(blocY))
+  
+  
+  for(i in 1:A){
+    mod <- oscorespls.fit(X.def,Y.def,ncomp=1,scale=F)
+    
+    #Vecteur de scores globaux
+    Tk[,i] <- mod$scores
+    Uk[,i] <- mod$Yscores
+    
+    #Vecteur des loadings de Y 
+    c[,i] <- mod$Yloadings
+    
+    N0 <- c(1,ncol(blocX.def[[1]])+1,ncol(blocX.def[[1]]) + ncol(blocX.def[[2]])+1,ncol(blocX.def[[1]]) + ncol(blocX.def[[2]])+ncol(blocX.def[[3]])+1)
+    NT <- c(ncol(blocX.def[[1]]),ncol(blocX.def[[1]]) + ncol(blocX.def[[2]]),ncol(blocX.def[[1]]) + ncol(blocX.def[[2]])+ncol(blocX.def[[3]]),ncol(blocX.def[[1]]) + ncol(blocX.def[[2]])+ncol(blocX.def[[3]])+ncol(blocX.def[[4]]))
+    
+    TT[[i]] <- matrix(NA,ncol=nb,nrow=n) 
+    pg <- wg <- NULL 
+    for(b in 1:nb){
+    
+      # Vecteur de poids de bloc w 
+      
+      Wb[[b]][,i] <-  t(blocX.def[[b]]) %*% Uk[,i] %*% ginv(t(Uk[,i])%*%Uk[,i])
+      Wb[[b]][,i] <- Wb[[b]][,i] / sqrt(t(Wb[[b]][,i] ) %*% Wb[[b]][,i] )
+      wg <- c(wg,Wb[[b]][,i])
+      
+	  # Vecteur de scores de bloc 
+      Tb[[b]][,i] <- blocX.def[[b]] %*% Wb[[b]][,i] 
+      TT[[i]][,b] <- Tb[[b]][,i]
+      
+      #Déflation des matrices
+      pb <- t(blocX.def[[b]]) %*% Tk[,i] %*% ginv(t(Tk[,i])%*%Tk[,i])
+      pg <- c(pg,pb)
+    }
+    X.def <- X.def - Tk[,i] %*% matrix(pg,nrow=1)
+    for(b in 1:nb) blocX.def[[b]] <- X.def[,N0[b]:NT[b]]
+    
+    if(deflY) Y.def <- data.frame(mod$residuals)
+    
+    # Vecteur de poids global 
+    Wk[,i] <- t(TT[[i]]) %*% Uk[,i] %*% ginv(t(Uk[,i])%*%Uk[,i])
+    Wk[,i] <- Wk[,i] / sqrt(t(Wk[,i])%*%Wk[,i])
+    
+    WG[,i] <- wg
+    PG[,i] <- pg
+  }
+  
+  # Régression
+  Qchap <- ginv(t(Tk)%*%Tk) %*% t(Tk) %*% blocY
+  Ypred <- Tk%*%Qchap
+  
+  Wstar <- WG %*% ginv(t(PG)%*%WG)
+  Qchapstar <- Wstar %*% Qchap
+  rownames(Qchapstar) <- colnames(X.Fus)
+  # Inertie expliquée 
+  I.Y  <- numeric(A)
+  I.Yb <- matrix(NA, ncol=nb, nrow=A)
+  I.X  <- matrix(NA, ncol=nb, nrow=A)
+  
+  for(i in 1:A){
+    I.Y[i] <- t(Tk[,i]) %*% Tk[,i] %*% t(c[,i]) %*% c[,i] / tr(t(blocY)%*%blocY)
+    
+    for(b in 1:nb){
+      I.Yb[i,b] <- t(Tb[[b]][,i]) %*% Tb[[b]][,i] %*% t(c[,i]) %*% c[,i] / tr(t(blocY)%*%blocY)
+	  p <- PG[N0[b]:NT[b],i]
+	  I.X[i,b] <- t(Tb[[b]][,i]) %*% Tb[[b]][,i] %*% t(p) %*% p / tr(t(blocX[[b]])%*%blocX[[b]])
+  }
+  }
+  
+  
+  
+  return(invisible(list(scoreX=Tk,scoreY=Uk,blocweigth=Wb,blocscore=Tb,loadings=PG,globalweight=WG,prediction = Ypred,Wstar=Wstar,CoeffBeta = Qchapstar,InertieG = I.Y, InertieB= I.Yb, InertieX = I.X, Yweight= c,blocX = blocX,weightBloc=Wk)))
+  
+}
+
